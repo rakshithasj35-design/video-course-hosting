@@ -17,7 +17,10 @@ services:
       - key: FLASK_DEBUG
         value: "false"
       - key: FRONTEND_URL
-        value: https://coursehub-video-hosting-web.onrender.com
+        fromService:
+          type: web
+          name: coursehub-video-hosting-web
+          envVarKey: RENDER_EXTERNAL_URL
       - key: JWT_SECRET
         generateValue: true
       - key: UPLOAD_ROOT
@@ -45,4 +48,7 @@ services:
         destination: /index.html
     envVars:
       - key: VITE_API_BASE_URL
-        value: https://coursehub-video-hosting-api.onrender.com
+        fromService:
+          type: web
+          name: coursehub-video-hosting-api
+          envVarKey: RENDER_EXTERNAL_URL
