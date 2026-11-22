@@ -4,6 +4,12 @@ import { Award, BookOpen, ChevronRight, GraduationCap, LayoutDashboard, LogOut, 
 import './App.css'
 
 const AuthContext = createContext(null)
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/+$/, '')
+
+function mediaUrl(url) {
+  if (!url || /^(?:[a-z][a-z\d+\-.]*:|\/\/)/i.test(url)) return url
+  return `${API_BASE_URL}${url.startsWith('/') ? '' : '/'}${url}`
+}
 
 function storedToken() {
   try {
@@ -30,7 +36,7 @@ function storedUser() {
 
 function api(path, options = {}) {
   const token = storedToken()
-  return fetch(`/api${path}`, {
+  return fetch(`${API_BASE_URL}/api${path}`, {
     ...options,
     headers: {
       ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
@@ -271,7 +277,7 @@ function Home() {
 function CourseCard({ course }) {
   return (
     <Link className="course-card" to={`/courses/${course.id}`}>
-      <div className="course-cover" style={course.thumbnail_url ? { backgroundImage: `url(${course.thumbnail_url})` } : undefined}>
+      <div className="course-cover" style={course.thumbnail_url ? { backgroundImage: `url(${mediaUrl(course.thumbnail_url)})` } : undefined}>
         {!course.thumbnail_url && <GraduationCap size={42} />}
         <span className="course-badge">{course.domain || 'Course'}</span>
       </div>
@@ -509,7 +515,7 @@ function CourseDetails() {
             </form>
           )}
         </section>
-        <aside className="detail-card"><div className="detail-cover">{course.thumbnail_url ? <img src={course.thumbnail_url} alt="" /> : <GraduationCap size={64} />}</div><div className="detail-price">{course.price > 0 ? `$${Number(course.price).toFixed(2)}` : 'Free'}</div>{course.is_enrolled ? <Link className="button full" to={`/learn/${id}`}>Continue learning</Link> : <button className="button full" onClick={enroll}>Enroll now</button>}{message && <div className="alert">{message}</div>}<div className="detail-facts"><span><b>{course.modules?.reduce((sum, module) => sum + (module.lessons?.length || 0), 0)}</b> lessons</span><span><b>Lifetime</b> access</span><span><b>Certificate</b> on completion</span></div></aside>
+        <aside className="detail-card"><div className="detail-cover">{course.thumbnail_url ? <img src={mediaUrl(course.thumbnail_url)} alt="" /> : <GraduationCap size={64} />}</div><div className="detail-price">{course.price > 0 ? `$${Number(course.price).toFixed(2)}` : 'Free'}</div>{course.is_enrolled ? <Link className="button full" to={`/learn/${id}`}>Continue learning</Link> : <button className="button full" onClick={enroll}>Enroll now</button>}{message && <div className="alert">{message}</div>}<div className="detail-facts"><span><b>{course.modules?.reduce((sum, module) => sum + (module.lessons?.length || 0), 0)}</b> lessons</span><span><b>Lifetime</b> access</span><span><b>Certificate</b> on completion</span></div></aside>
       </div>
     </main>
   )
@@ -532,7 +538,7 @@ function StudentDashboard() {
     api('/my-courses').then(setCourses).catch(() => setCourses([]))
   }, [])
   const average = courses.length ? Math.round(courses.reduce((sum, course) => sum + course.progress, 0) / courses.length) : 0
-  return <DashboardLayout title="Learning overview" active="dashboard"><div className="stat-grid"><StatCard label="Enrolled courses" value={courses.length} icon={<BookOpen />} /><StatCard label="Average progress" value={`${average}%`} icon={<Trophy />} /><StatCard label="Completed" value={courses.filter((course) => course.progress === 100).length} icon={<Award />} /></div><h2 className="dashboard-section-title">Continue learning</h2>{courses.length ? <div className="learning-list">{courses.map((course) => <Link className="learning-card" to={`/learn/${course.id}`} key={course.id}><div className="learning-cover" style={course.thumbnail_url ? { backgroundImage: `url(${course.thumbnail_url})` } : undefined}>{!course.thumbnail_url && <PlayCircle />}</div><div><h3>{course.title}</h3><p>{formatCourseMeta(course)}</p><p>{course.completed_lessons} of {course.total_lessons} lessons</p><div className="progress-track"><span style={{ width: `${course.progress}%` }} /></div></div><b>{course.progress}%</b></Link>)}</div> : <EmptyState title="Start learning" text="Browse courses and enroll to begin." />}</DashboardLayout>
+  return <DashboardLayout title="Learning overview" active="dashboard"><div className="stat-grid"><StatCard label="Enrolled courses" value={courses.length} icon={<BookOpen />} /><StatCard label="Average progress" value={`${average}%`} icon={<Trophy />} /><StatCard label="Completed" value={courses.filter((course) => course.progress === 100).length} icon={<Award />} /></div><h2 className="dashboard-section-title">Continue learning</h2>{courses.length ? <div className="learning-list">{courses.map((course) => <Link className="learning-card" to={`/learn/${course.id}`} key={course.id}><div className="learning-cover" style={course.thumbnail_url ? { backgroundImage: `url(${mediaUrl(course.thumbnail_url)})` } : undefined}>{!course.thumbnail_url && <PlayCircle />}</div><div><h3>{course.title}</h3><p>{formatCourseMeta(course)}</p><p>{course.completed_lessons} of {course.total_lessons} lessons</p><div className="progress-track"><span style={{ width: `${course.progress}%` }} /></div></div><b>{course.progress}%</b></Link>)}</div> : <EmptyState title="Start learning" text="Browse courses and enroll to begin." />}</DashboardLayout>
 }
 
 function StatCard({ label, value, icon }) {
@@ -544,7 +550,7 @@ function MyCourses() {
   useEffect(() => {
     api('/my-courses').then(setCourses).catch(() => setCourses([]))
   }, [])
-  return <DashboardLayout title="My courses" active="courses"><div className="learning-list">{courses.map((course) => <Link className="learning-card" to={`/learn/${course.id}`} key={course.id}><div className="learning-cover" style={course.thumbnail_url ? { backgroundImage: `url(${course.thumbnail_url})` } : undefined}>{!course.thumbnail_url && <PlayCircle />}</div><div><h3>{course.title}</h3><p>{formatCourseMeta(course)}</p><p>{course.completed_lessons} of {course.total_lessons} lessons completed</p><div className="progress-track"><span style={{ width: `${course.progress}%` }} /></div></div><b>{course.progress}%</b></Link>)}</div>{!courses.length && <EmptyState title="No enrolled courses" text="Explore the course catalog to get started." />}</DashboardLayout>
+  return <DashboardLayout title="My courses" active="courses"><div className="learning-list">{courses.map((course) => <Link className="learning-card" to={`/learn/${course.id}`} key={course.id}><div className="learning-cover" style={course.thumbnail_url ? { backgroundImage: `url(${mediaUrl(course.thumbnail_url)})` } : undefined}>{!course.thumbnail_url && <PlayCircle />}</div><div><h3>{course.title}</h3><p>{formatCourseMeta(course)}</p><p>{course.completed_lessons} of {course.total_lessons} lessons completed</p><div className="progress-track"><span style={{ width: `${course.progress}%` }} /></div></div><b>{course.progress}%</b></Link>)}</div>{!courses.length && <EmptyState title="No enrolled courses" text="Explore the course catalog to get started." />}</DashboardLayout>
 }
 
 function ProgressPage() {
@@ -560,7 +566,7 @@ function CertificatePage() {
   useEffect(() => {
     api('/certificates').then(setCertificates).catch(() => setCertificates([]))
   }, [])
-  return <DashboardLayout title="My certificates" active="certificates"><div className="certificate-grid">{certificates.map((certificate) => <article className="certificate-card" key={certificate.id}><div className="certificate-preview"><Award size={44} /><b>Certificate of Completion</b><span>{certificate.course_name}</span></div><h3>{certificate.course_name}</h3><a className="button small" href={certificate.pdf_url} download target="_blank" rel="noreferrer">Download PDF</a></article>)}</div>{!certificates.length && <EmptyState title="No certificates yet" text="Complete all lessons in a course to earn one." />}</DashboardLayout>
+  return <DashboardLayout title="My certificates" active="certificates"><div className="certificate-grid">{certificates.map((certificate) => <article className="certificate-card" key={certificate.id}><div className="certificate-preview"><Award size={44} /><b>Certificate of Completion</b><span>{certificate.course_name}</span></div><h3>{certificate.course_name}</h3><a className="button small" href={mediaUrl(certificate.pdf_url)} download target="_blank" rel="noreferrer">Download PDF</a></article>)}</div>{!certificates.length && <EmptyState title="No certificates yet" text="Complete all lessons in a course to earn one." />}</DashboardLayout>
 }
 
 function ProfilePage() {
@@ -729,7 +735,7 @@ function LearnPage() {
               key={active.id}
               controls
               preload="metadata"
-              src={active.video_url}
+              src={mediaUrl(active.video_url)}
               onLoadedMetadata={(event) => {
                 if (active.last_position_seconds) event.currentTarget.currentTime = active.last_position_seconds
                 lastProgressSaved.current = active.last_position_seconds || 0
@@ -880,7 +886,7 @@ function TutorCourse({ course, domains, categories, onChange }) {
   return (
     <article className="tutor-course">
       <div className="tutor-course-main">
-        <div className="course-cover small">{course.thumbnail_url ? <img src={course.thumbnail_url} alt="" /> : <GraduationCap />}</div>
+        <div className="course-cover small">{course.thumbnail_url ? <img src={mediaUrl(course.thumbnail_url)} alt="" /> : <GraduationCap />}</div>
         <div><h3>{course.title}</h3><p>{course.description}</p><div className="course-inline-meta"><span>{formatCourseMeta(course)}</span><span className={`status-pill ${course.status}`}>{course.status}</span><span>{course.students} learners</span><span>{Number(course.average_rating || 0).toFixed(1)} ★ ({course.review_count || 0})</span></div></div>
       </div>
       <div className="tutor-course-actions">

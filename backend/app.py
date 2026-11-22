@@ -19,10 +19,17 @@ from db import get_database_connection
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app, origins=os.getenv("FRONTEND_URL", "http://localhost:5173"))
+frontend_origins = [
+    origin.strip().rstrip("/")
+    for origin in os.getenv("FRONTEND_URL", "http://localhost:5173").split(",")
+    if origin.strip()
+]
+CORS(app, origins=frontend_origins)
 app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024
 
-UPLOAD_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "uploads"))
+UPLOAD_ROOT = os.path.abspath(
+    os.getenv("UPLOAD_ROOT") or os.path.join(os.path.dirname(__file__), "uploads")
+)
 THUMBNAIL_DIR = os.path.join(UPLOAD_ROOT, "thumbnails")
 VIDEO_DIR = os.path.join(UPLOAD_ROOT, "videos")
 CERTIFICATE_DIR = os.path.join(UPLOAD_ROOT, "certificates")

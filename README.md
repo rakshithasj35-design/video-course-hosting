@@ -57,3 +57,7 @@ npm run dev
 ```
 
 Open `http://localhost:5173`.
+
+## Production deployment
+
+See [DEPLOYMENT.md](./DEPLOYMENT.md) for the Render Blueprint, production environment variables, hosted MySQL migration, persistent upload storage, and verification steps.
