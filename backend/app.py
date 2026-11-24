@@ -1,8 +1,13 @@
+import hashlib
 import os
 import secrets
+import smtplib
+import ssl
 import uuid
 from datetime import datetime, timedelta, timezone
+from email.message import EmailMessage
 from functools import wraps
+from urllib.parse import urlencode
 
 import bcrypt
 import jwt
@@ -27,14 +32,23 @@ frontend_origins = [
 CORS(app, origins=frontend_origins)
 app.config["MAX_CONTENT_LENGTH"] = 500 * 1024 * 1024
 
-UPLOAD_ROOT = os.path.abspath(
-    os.getenv("UPLOAD_ROOT") or os.path.join(os.path.dirname(__file__), "uploads")
-)
+configured_upload_root = os.getenv("UPLOAD_ROOT")
+default_upload_root = os.path.join(os.path.dirname(__file__), "uploads")
+UPLOAD_ROOT = os.path.abspath(configured_upload_root or default_upload_root)
 THUMBNAIL_DIR = os.path.join(UPLOAD_ROOT, "thumbnails")
 VIDEO_DIR = os.path.join(UPLOAD_ROOT, "videos")
 CERTIFICATE_DIR = os.path.join(UPLOAD_ROOT, "certificates")
 for directory in (THUMBNAIL_DIR, VIDEO_DIR, CERTIFICATE_DIR):
-    os.makedirs(directory, exist_ok=True)
+    try:
+        os.makedirs(directory, exist_ok=True)
+    except PermissionError:
+        UPLOAD_ROOT = os.path.abspath(default_upload_root)
+        THUMBNAIL_DIR = os.path.join(UPLOAD_ROOT, "thumbnails")
+        VIDEO_DIR = os.path.join(UPLOAD_ROOT, "videos")
+        CERTIFICATE_DIR = os.path.join(UPLOAD_ROOT, "certificates")
+        for fallback_directory in (THUMBNAIL_DIR, VIDEO_DIR, CERTIFICATE_DIR):
+            os.makedirs(fallback_directory, exist_ok=True)
+        break
 
 JWT_SECRET = os.getenv("JWT_SECRET")
 if not JWT_SECRET or JWT_SECRET == "replace-with-a-long-random-secret":
@@ -94,6 +108,52 @@ def create_token(user):
         "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRY_HOURS),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+def password_reset_smtp_settings():
+    host = os.getenv("SMTP_HOST", "").strip()
+    from_email = os.getenv("SMTP_FROM_EMAIL", "").strip()
+    username = os.getenv("SMTP_USERNAME", "").strip()
+    password = os.getenv("SMTP_PASSWORD", "")
+    tls_value = os.getenv("SMTP_USE_TLS", "true").strip().lower()
+    if not host or not from_email or bool(username) != bool(password):
+        return None
+    if tls_value not in {"true", "false", "1", "0", "yes", "no"}:
+        return None
+    try:
+        port = int(os.getenv("SMTP_PORT", "587"))
+    except ValueError:
+        return None
+    if not 1 <= port <= 65535:
+        return None
+    return {
+        "host": host,
+        "port": port,
+        "from_email": from_email,
+        "username": username,
+        "password": password,
+        "use_tls": tls_value in {"true", "1", "yes"},
+    }
+
+
+def send_password_reset_email(to_email, reset_url, settings):
+    message = EmailMessage()
+    message["Subject"] = "Reset your CourseHub password"
+    message["From"] = settings["from_email"]
+    message["To"] = to_email
+    message.set_content(
+        "We received a request to reset your CourseHub password.\n\n"
+        f"Use this link within 30 minutes to choose a new password:\n{reset_url}\n\n"
+        "If you did not request this, you can ignore this email."
+    )
+    with smtplib.SMTP(settings["host"], settings["port"], timeout=15) as server:
+        server.ehlo()
+        if settings["use_tls"]:
+            server.starttls(context=ssl.create_default_context())
+            server.ehlo()
+        if settings["username"]:
+            server.login(settings["username"], settings["password"])
+        server.send_message(message)
 
 
 def auth_required(roles=None, optional=False):
@@ -309,6 +369,112 @@ def login():
         return jsonify({"error": "This account has been deactivated"}), 403
     public_user = {key: user[key] for key in ("id", "name", "email", "role")}
     return jsonify({"token": create_token(public_user), "user": public_user})
+
+
+@app.post("/api/auth/forgot-password")
+def forgot_password():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email")
+    if not isinstance(email, str):
+        return jsonify({"error": "Enter a valid email address"}), 400
+    email = email.strip().lower()
+    if not email or len(email) > 255 or "@" not in email or any(character.isspace() for character in email):
+        return jsonify({"error": "Enter a valid email address"}), 400
+
+    smtp_settings = password_reset_smtp_settings()
+    if not smtp_settings:
+        return jsonify({"error": "Password reset email is not configured. Please contact the site administrator."}), 503
+
+    generic_message = "If an account exists for that email address, a password reset link will be sent shortly."
+    user = fetch_one(
+        "SELECT id,email FROM users WHERE email=%s AND is_active=TRUE",
+        (email,),
+    )
+    if not user:
+        return jsonify({"message": generic_message}), 202
+
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    existing_request = fetch_one(
+        "SELECT requested_at FROM password_reset_tokens WHERE user_id=%s",
+        (user["id"],),
+    )
+    if existing_request and existing_request["requested_at"] > now - timedelta(seconds=60):
+        return jsonify({"message": generic_message}), 202
+
+    reset_token = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(reset_token.encode("utf-8")).hexdigest()
+    expires_at = now + timedelta(minutes=30)
+    execute(
+        """
+        INSERT INTO password_reset_tokens (user_id,token_hash,expires_at,requested_at)
+        VALUES (%s,%s,%s,%s)
+        ON DUPLICATE KEY UPDATE
+            token_hash=VALUES(token_hash),
+            expires_at=VALUES(expires_at),
+            requested_at=VALUES(requested_at)
+        """,
+        (user["id"], token_hash, expires_at, now),
+    )
+    reset_url = f"{frontend_origins[0]}/reset-password?{urlencode({'token': reset_token})}"
+    try:
+        send_password_reset_email(user["email"], reset_url, smtp_settings)
+    except Exception:
+        app.logger.exception("Password reset email delivery failed")
+        try:
+            execute("DELETE FROM password_reset_tokens WHERE token_hash=%s", (token_hash,))
+        except Exception:
+            app.logger.exception("Could not remove an undelivered password reset token")
+    return jsonify({"message": generic_message}), 202
+
+
+@app.post("/api/auth/reset-password")
+def reset_password():
+    data = request.get_json(silent=True) or {}
+    reset_token = data.get("token")
+    password = data.get("password")
+    if not isinstance(reset_token, str) or not reset_token or len(reset_token) > 256 or not isinstance(password, str):
+        return jsonify({"error": "Invalid or expired reset link"}), 400
+    if len(password) < 8 or len(password.encode("utf-8")) > 72:
+        return jsonify({"error": "Password must be at least 8 characters and no more than 72 bytes"}), 400
+
+    token_hash = hashlib.sha256(reset_token.encode("utf-8")).hexdigest()
+    password_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    connection = db()
+    cursor = connection.cursor(dictionary=True)
+    try:
+        connection.start_transaction()
+        cursor.execute(
+            """
+            SELECT prt.user_id
+            FROM password_reset_tokens prt
+            JOIN users ON users.id=prt.user_id
+            WHERE prt.token_hash=%s
+              AND prt.expires_at > UTC_TIMESTAMP()
+              AND users.is_active=TRUE
+            FOR UPDATE
+            """,
+            (token_hash,),
+        )
+        reset_record = cursor.fetchone()
+        if not reset_record:
+            connection.rollback()
+            return jsonify({"error": "This reset link is invalid or has expired"}), 400
+        cursor.execute(
+            "UPDATE users SET password_hash=%s WHERE id=%s",
+            (password_hash, reset_record["user_id"]),
+        )
+        cursor.execute(
+            "DELETE FROM password_reset_tokens WHERE token_hash=%s",
+            (token_hash,),
+        )
+        connection.commit()
+        return jsonify({"message": "Password updated successfully"})
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        cursor.close()
+        connection.close()
 
 
 @app.get("/api/auth/me")
